@@ -4,10 +4,12 @@ import matplotlib.pyplot as plt
 
 EPSILON = 1e-16
 
-sigma = lambda z, t: tf.nn.softmax(z/t, dim=-1)
-H = lambda z: (1.+tf.sign(z))/2.
-select_max = lambda z, K: tf.one_hot(tf.argmax(z, axis=-1), K)
+sigma = lambda z, t: tf.nn.softmax(z/t, dim=-1) #scaled softmax
+H = lambda z: (1.+tf.sign(z))/2. #Heaviside
+select_max = lambda z, K: tf.one_hot(tf.argmax(z, axis=-1), K) #one-hot argmax
+#score function of Bernoulli using raw probabilities p
 binary_score = lambda b, p: (b / p - (1. - b) / (1. - p))
+#score function of categorical using log probabilities alpha
 discrete_score = lambda b, alpha: b
 
 def binary_forward(p):
@@ -101,19 +103,19 @@ def REBAR(f, hard_params, nu, params = [], var_params = [],
     var_grad = [(tf.reduce_sum(2*full_grad*grad), param) for grad, param in var_params_grad]
     return [(full_grad, hard_params)] + params_grad, f(b), var_grad
 
-def binaryREBAR(f, hard_params, nu, params=[], var_param=[]):
+def binaryREBAR(f, hard_params, nu, params=[], var_params=[]):
     'REBAR for binary distribution.'
     return REBAR(f, hard_params, nu, params, var_params,
-          forward = binary_forward, backward=binary_backward,
+          forward=binary_forward, backward=binary_backward,
           score=binary_score,
           hard_gate=H, soft_gate=sigma, preprocess=tf.identity)
 
-def categoricalREBAR(f, hard_params, nu, temperature, K, params = [], var_params = []):
+def categoricalREBAR(f, hard_params, nu, temperature, K, params=[], var_params=[]):
     'REBAR for categorical distribution with K categories.'
     return REBAR(f, hard_params, nu, params, var_params,
-                 forward = categorical_forward, backward = categorical_backward,
-                 soft_gate = lambda z: sigma(z, temperature),
-                 hard_gate = lambda z: select_max(z, K), score=discrete_score)
+                 forward=categorical_forward, backward=categorical_backward,
+                 soft_gate=lambda z: sigma(z, temperature),
+                 hard_gate=lambda z: select_max(z, K), score=discrete_score)
 
 
 if __name__ is "__main__":
@@ -141,6 +143,7 @@ if __name__ is "__main__":
     sess = tf.InteractiveSession()
     sess.run(tf.global_variables_initializer())
 
+    #Calculate gradients using REBAR
     base_grads = []
     for _ in range(R):
         base_grads += sess.run([grad_estimator])
@@ -148,6 +151,7 @@ if __name__ is "__main__":
     base_mu = base_grad.mean(axis=0)
     base_var = np.square(base_grad - base_mu).mean(axis=0)
 
+    #POptimize nu and temp, then Calculate gradients using REBAR
     for _ in range(10000):
         sess.run(train_step)
 
@@ -158,6 +162,7 @@ if __name__ is "__main__":
     opt_mu = opt_grad.mean(axis=0)
     opt_var = np.square(opt_grad - opt_mu).mean(axis=0)
 
+    #Calculate gradients without REBAR
     sess.run(tf.assign(nu, 0.))
     raw_grads = []
     for _ in range(R):
