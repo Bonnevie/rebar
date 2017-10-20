@@ -130,10 +130,13 @@ if __name__ is "__main__":
         return -tf.reduce_sum(z) - tf.reduce_sum(z*true_index)
 
     Z = tf.Variable(true_index, dtype=tf.float32)
-    temp = tf.Variable(0.5)
-    nu = tf.Variable(1.)
+    temp_var = tf.Variable(1.)
+    temp = tf.nn.softplus(temp_var)
+    nu_var = tf.Variable(1.)
+    nu_switch = tf.Variable(1.)
+    nu = nu_switch*tf.nn.softplus(nu_var)
 
-    grad, loss, var_grad = categoricalREBAR(f, Z, nu, temp, K, var_params = [nu, temp])
+    grad, loss, var_grad = categoricalREBAR(f, Z, nu, temp, K, var_params = [temp_var, nu_var])
 
     grad_estimator = grad[0]
 
@@ -152,9 +155,9 @@ if __name__ is "__main__":
     base_var = np.square(base_grad - base_mu).mean(axis=0)
 
     #POptimize nu and temp, then Calculate gradients using REBAR
-    for _ in range(10000):
+    for _ in range(20000):
         sess.run(train_step)
-
+    print("optimal temperature: {}\n optimal control weight: {}".format(temp.eval(), nu.eval()))
     opt_grads = []
     for _ in range(R):
         opt_grads += sess.run([grad_estimator])
@@ -163,7 +166,7 @@ if __name__ is "__main__":
     opt_var = np.square(opt_grad - opt_mu).mean(axis=0)
 
     #Calculate gradients without REBAR
-    sess.run(tf.assign(nu, 0.))
+    sess.run(tf.assign(nu_switch, 0.))
     raw_grads = []
     for _ in range(R):
         raw_grads += sess.run([grad_estimator])
@@ -173,4 +176,5 @@ if __name__ is "__main__":
 
     svars = np.column_stack([base_var.ravel(), opt_var.ravel(), raw_var.ravel()])
     plt.boxplot(np.log(svars))
-    plt.xticks(np.arange(3), ['REBAR', 'Optimized REBAR', 'Score Estimator'])
+    plt.xticks(np.arange(1,4), ['REBAR', 'Optimized REBAR', 'Score Estimator'])
+    plt.ylabel("Sample Variance ({} samples)".format(R))
