@@ -39,7 +39,7 @@ def categorical_backward(alpha, s):
     v = tf.random_uniform(alpha.shape.as_list())
     gumbel = - tf.log( - tf.log(v + EPSILON) + EPSILON , name="gumbel")
     topgumbels = gumbel + tf.reduce_logsumexp(alpha, axis=-1, keep_dims=True)
-    topgumbel = tf.reduce_sum(s*topgumbels)
+    topgumbel = tf.reduce_sum(s*topgumbels, axis=-1, keep_dims=True)
 
     truncgumbel = truncated_gumbel(gumbel + alpha, topgumbel)
     return (1.-s)*truncgumbel + s*topgumbels
