@@ -44,10 +44,8 @@ def categorical_backward(alpha, s):
     truncgumbel = truncated_gumbel(gumbel + alpha, topgumbel)
     return (1.-s)*truncgumbel + s*topgumbels
 
-def REBAR(f, hard_params, nu, params = [], var_params = [],
-          forward = binary_forward, backward = binary_backward,
-          score = binary_score,
-          hard_gate = H, soft_gate = sigma, preprocess=tf.identity):
+def REBAR(f, hard_params, forward, backward, distribution,
+          hard_gate, soft_gate, nu=1., params=[], var_params=[]):
     '''Estimate the gradient of the composed function:
 
         f(hard_gate(forward(preprocess(hard_params))), params)
@@ -56,36 +54,41 @@ def REBAR(f, hard_params, nu, params = [], var_params = [],
 
         f(b, params) - function in discrete variable b and parameters param.
         b=hard_gate(z) - discretization of z.
-        z=forward(preprocess(hard_params)) - differentiable reparameterization.
+        z=forward - differentiable reparameterization.
 
     using the REBAR estimator for the gradient with respect to hard_params and
     using a standard sampling estimator for params.
 
     f - function of interest.
     hard_params - parameter that codes for discrete random variables.
-    nu - the REBAR regularization weight.
-    params - other parameters. Uses same samples as REBAR.
-    var_params = parameters that the estimator's variance should be minimized for.
-    forward - a stochastic function taking hard_params as input.
-        Returns the reparameterized discrete random variable prior to discretization.
-    backward - a stochastic function taking hard_params and a discrete variable of the same size as input.
-        Returns the reparameterized discrete random variable prior to discretization,
-        conditioned on the discretization being equal to the passed discrete variable.
-    score - score function of discrete random variable
+    forward - a stochastic TF tensor depending on hard_params.
+        Corresponds to the reparameterized discrete random variable
+        prior to discretization.
+    backward - a function that returns a stochastic TF tensor given b.
+        Returns the reparameterized discrete random variable
+        prior to discretization, conditioned on the discretization being equal
+        to the passed discrete variable.
+    distribution - a function that evaluates the log-probability of the
+        discrete random variable being sampled.
     hard_gate - function that discretizes the latent discrete variable.
-    soft_gate - a continuous relaxation of hard_gate.
-    preprocess - a function (e.g. squashing) applied to hard_params a priori.
+    soft_gate - a continuous differentiable relaxation of hard_gate.
+    params - other parameters. Uses same samples as REBAR.
+    var_params - parameters that the estimator's variance should be minimized for.
+    nu - the REBAR regularization weight.
 
     Returns:
         gradients - REBAR gradient estimator for params and hard_params.
         loss - function evaluated in discrete random sample.
         var_grad - gradient of estimator variance for var_params.
     '''
+
     #forward+backward
-    p = preprocess(hard_params)
-    z = forward(p)
+    z = forward
     b = tf.stop_gradient(hard_gate(z))
-    zb = backward(p, b)
+    zb = backward(b)
+
+    #score
+    score = tf.gradients(distribution(b), hard_params)[0]
 
     #gradient collection
     pure_grad = tf.gradients(f(b), hard_params)[0]
@@ -94,7 +97,7 @@ def REBAR(f, hard_params, nu, params = [], var_params = [],
     if pure_grad is not None:
         full_grad += pure_grad
     if rebar_grad is not None:
-        full_grad += ((f(b) - nu * f(soft_gate(zb))) * score(b,p) +
+        full_grad += ((f(b) - nu * f(soft_gate(zb))) * score +
                                      nu * rebar_grad)
 
     params_grad = list(zip(tf.gradients(f(b), params), params))
@@ -103,19 +106,7 @@ def REBAR(f, hard_params, nu, params = [], var_params = [],
     var_grad = [(tf.reduce_sum(2*full_grad*grad), param) for grad, param in var_params_grad]
     return [(full_grad, hard_params)] + params_grad, f(b), var_grad
 
-def binaryREBAR(f, hard_params, nu, params=[], var_params=[]):
-    'REBAR for binary distribution.'
-    return REBAR(f, hard_params, nu, params, var_params,
-          forward=binary_forward, backward=binary_backward,
-          score=binary_score,
-          hard_gate=H, soft_gate=sigma, preprocess=tf.identity)
 
-def categoricalREBAR(f, hard_params, nu, temperature, K, params=[], var_params=[]):
-    'REBAR for categorical distribution with K categories.'
-    return REBAR(f, hard_params, nu, params, var_params,
-                 forward=categorical_forward, backward=categorical_backward,
-                 soft_gate=lambda z: sigma(z, temperature),
-                 hard_gate=lambda z: select_max(z, K), score=discrete_score)
 
 
 if __name__ is "__main__":
@@ -136,7 +127,14 @@ if __name__ is "__main__":
     nu_switch = tf.Variable(1.)
     nu = nu_switch*tf.nn.softplus(nu_var)
 
-    grad, loss, var_grad = categoricalREBAR(f, Z, nu, temp, K, var_params = [temp_var, nu_var])
+    forward = categorical_forward(Z)
+    backward = lambda b: categorical_backward(Z, b)
+    distribution = lambda b: tf.reduce_sum(b*Z, axis=-1)
+
+    grad, loss, var_grad = REBAR(f, Z, forward, backward, distribution, nu=nu,
+                                 hard_gate=lambda z: select_max(z, K),
+                                 soft_gate=lambda z: sigma(z, temp),
+                                 var_params=[temp_var, nu_var])
 
     grad_estimator = grad[0]
 
