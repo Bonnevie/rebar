@@ -44,20 +44,118 @@ def categorical_backward(alpha, s):
     truncgumbel = truncated_gumbel(gumbel + alpha, topgumbel)
     return (1.-s)*truncgumbel + s*topgumbels
 
+def buildcontrol(f_loss, f_control, logpdf,
+                 forward, backward,
+                 hard_gate, soft_gate):
+    '''
+    Draw z~p(z), and zb~p(z|b) where b=hard_gate(z), and construct loss and
+    control variates appropriate for use in RELAX estimator.
+
+    f_loss - Function. Function of discrete variable b.
+    f_control - Function. Parametric control variate.
+    lnpdf - a function that evaluates the log-probability ln p(b) of the
+        discrete random variable b.
+    forward - a stochastic TF tensor depending on hard_params.
+        Corresponds to z, the reparameterized discrete random variable
+        prior to discretization.
+    backward - a function that returns a stochastic TF tensor given b.
+        Returns zb, the reparameterized discrete random variable
+        prior to discretization, conditioned on the discretization being equal
+        to the passed discrete variable.
+    hard_gate - function that discretizes the latent discrete variable.
+    soft_gate - a continuous differentiable relaxation of hard_gate.
+
+    Returns:
+        loss - TF tensor f_loss(hard_gate(z)).
+        control - TF tensor f_control(soft_gate(z)).
+        conditional_control - TF tensor f_control(soft_gate(zb)).
+        logp - TF tensor logpdf(b)
+    '''
+    #forward+backward
+    z = forward
+    b = tf.stop_gradient(hard_gate(z))
+    zb = backward(b)
+
+    loss = f_loss(b)
+    control = f_control(soft_gate(z))
+    conditional_control = f_control(soft_gate(zb))
+    logp = distribution(b)
+
+    return loss, control, conditional_control, logp
+
+def RELAX(loss, control, conditional_control, logp,
+          hard_params, params=[], var_params=[]):
+    '''Estimate the gradient of "loss" with respect to "hard_params" which
+    enter the loss through a stochastic non-differentiable map.
+    Use RELAX estimator for the gradient with respect to "hard_params" and
+    use a standard sampling estimator for parameters in "params".
+
+    The RELAX estimator estimates the gradient of f(b) where
+    H(b)=z and z~p(z;hard_params) using a control variate function c().
+    The input "control" corresponds to c(z) and "conditional_control" to c(zb)
+    where zb~p(z|b). For a canonical construction, see "buildcontrol" function.
+    Note: RELAX estimator may be wrong if construction is not correct.
+    Respect above relationship between "control" and "conditional_control" and
+    use tf.stop_gradient on the discrete variable as in "buildcontrol".
+
+    loss - scalar tensor to compute gradients for.
+    control - differentiable tensor approximating loss.
+    conditional_control - identical to control, but with noise conditioned on
+        discrete sample.
+    logp - a stochastic tensor equal to the log-probability ln p(b)
+        of the discrete random variable b being sampled.
+    params - other parameters. Uses same samples as REBAR.
+    var_params - parameters that the estimator's variance should be minimized for.
+
+    Returns:
+        gradients - REBAR gradient estimator for params and hard_params.
+        loss - function evaluated in discrete random sample.
+        var_grad - gradient of estimator variance for var_params.
+    '''
+
+    #score
+    score = tf.gradients(logp, hard_params)[0]
+
+    #compute gradient of loss outside of dependence through b.
+    pure_grad = tf.gradients(loss, hard_params)[0]
+
+    #Derivative of differentiable control variate.
+    relax_grad = tf.gradients(control - conditional_control, hard_params)[0]
+
+    #aggregate gradient components
+    full_grad = tf.zeros_like(hard_params)
+    if pure_grad is not None:
+        full_grad += pure_grad
+    if relax_grad is not None:
+        #complete RELAX estimator
+        full_grad += ((loss - conditional_control) * score + relax_grad)
+
+    #auxiliary gradients
+    params_grad = list(zip(tf.gradients(loss, params), params))
+    var_params_grad = list(zip(tf.gradients(full_grad, var_params), var_params))
+
+    #compute variance gradient
+    var_grad = [(tf.reduce_sum(2*full_grad*grad), param) for grad, param in var_params_grad]
+    return [(full_grad, hard_params)] + params_grad, loss, var_grad
+
 def REBAR(f, hard_params, forward, backward, distribution,
           hard_gate, soft_gate, nu=1., params=[], var_params=[]):
     '''Estimate the gradient of the composed function:
 
-        f(hard_gate(forward(preprocess(hard_params))), params)
+        f(hard_gate(forward)), params)
 
     composed of,
 
         f(b, params) - function in discrete variable b and parameters param.
         b=hard_gate(z) - discretization of z.
-        z=forward - differentiable reparameterization.
+        z=forward - differentiable reparameterization of b,
+                    stochastic function of hard_params.
 
     using the REBAR estimator for the gradient with respect to hard_params and
     using a standard sampling estimator for params.
+
+    REBAR corresponds to a RELAX estimator where the loss f(hard_gate(z)) is
+    estimated by the control f(soft_gate(z)).
 
     f - function of interest.
     hard_params - parameter that codes for discrete random variables.
@@ -82,32 +180,14 @@ def REBAR(f, hard_params, forward, backward, distribution,
         var_grad - gradient of estimator variance for var_params.
     '''
 
-    #forward+backward
-    z = forward
-    b = tf.stop_gradient(hard_gate(z))
-    zb = backward(b)
-
-    #score
-    score = tf.gradients(distribution(b), hard_params)[0]
-
-    #gradient collection
-    pure_grad = tf.gradients(f(b), hard_params)[0]
-    rebar_grad = tf.gradients(f(soft_gate(z)) - f(soft_gate(zb)), hard_params)[0]
-    full_grad = tf.zeros_like(hard_params)
-    if pure_grad is not None:
-        full_grad += pure_grad
-    if rebar_grad is not None:
-        full_grad += ((f(b) - nu * f(soft_gate(zb))) * score +
-                                     nu * rebar_grad)
-
-    params_grad = list(zip(tf.gradients(f(b), params), params))
-    var_params_grad = list(zip(tf.gradients(full_grad, var_params), var_params))
-
-    var_grad = [(tf.reduce_sum(2*full_grad*grad), param) for grad, param in var_params_grad]
-    return [(full_grad, hard_params)] + params_grad, f(b), var_grad
-
-
-
+    #compute canonical control variate
+    loss, control, conditional_control, logp = buildcontrol(f, f, distribution,
+                                                            forward, backward,
+                                                            hard_gate,
+                                                            soft_gate)
+    #redirect to RELAX
+    return RELAX(loss, nu*control, nu*conditional_control, logp,
+                 hard_params, params, var_params)
 
 if __name__ is "__main__":
 
@@ -120,7 +200,7 @@ if __name__ is "__main__":
     def f(z):
         return -tf.reduce_sum(z) - tf.reduce_sum(z*true_index)
 
-    Z = tf.Variable(true_index, dtype=tf.float32)
+    Z = tf.identity(tf.Variable(true_index, dtype=tf.float32))
     temp_var = tf.Variable(1.)
     temp = tf.nn.softplus(temp_var)
     nu_var = tf.Variable(1.)
@@ -175,4 +255,4 @@ if __name__ is "__main__":
     svars = np.column_stack([base_var.ravel(), opt_var.ravel(), raw_var.ravel()])
     plt.boxplot(np.log(svars))
     plt.xticks(np.arange(1,4), ['REBAR', 'Optimized REBAR', 'Score Estimator'])
-    plt.ylabel("Sample Variance ({} samples)".format(R))
+    plt.ylabel("Log Sample Variance ({} samples)".format(R))
