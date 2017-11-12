@@ -14,20 +14,20 @@ discrete_score = lambda b, alpha: b
 
 def binary_forward(p):
     '''draw reparameterization z of binary variable b from p(z).'''
-    u = tf.random_uniform(p.shape.as_list())
+    u = tf.random_uniform(p.shape.as_list(), dtype=p.dtype)
     z = tf.log(p) - tf.log(1. - p) + tf.log(u) - tf.log(1. - u)
     return z
 
 def binary_backward(p, b):
     '''draw reparameterization z of binary variable b from p(z|b).'''
-    v = tf.random_uniform(p.shape.as_list())
+    v = tf.random_uniform(p.shape.as_list(), dtype=p.dtype)
     ub = b * p + v * (b * (1. - p) + (1. - b) * p)
     zb = tf.log(p) - tf.log(1. - p) + tf.log(ub) - tf.log(1. - ub)
     return zb
 
 def categorical_forward(alpha):
     '''draw reparameterization z of categorical variable b from p(z).'''
-    u = tf.random_uniform(alpha.shape.as_list())
+    u = tf.random_uniform(alpha.shape.as_list(), dtype=alpha.dtype)
     gumbel = - tf.log( - tf.log(u + EPSILON) + EPSILON , name="gumbel")
     return alpha + gumbel
 
@@ -36,7 +36,7 @@ def categorical_backward(alpha, s):
     def truncated_gumbel(gumbel, truncation):
         return -tf.log(tf.exp(-gumbel) + tf.exp(-truncation))
 
-    v = tf.random_uniform(alpha.shape.as_list())
+    v = tf.random_uniform(alpha.shape.as_list(), dtype=alpha.dtype)
     gumbel = - tf.log( - tf.log(v + EPSILON) + EPSILON , name="gumbel")
     topgumbels = gumbel + tf.reduce_logsumexp(alpha, axis=-1, keep_dims=True)
     topgumbel = tf.reduce_sum(s*topgumbels, axis=-1, keep_dims=True)
