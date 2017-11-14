@@ -12,9 +12,12 @@ binary_score = lambda b, p: (b / p - (1. - b) / (1. - p))
 #score function of categorical using log probabilities alpha
 discrete_score = lambda b, alpha: b
 
-def binary_forward(p):
+def binary_forward(p, noise=None):
     '''draw reparameterization z of binary variable b from p(z).'''
-    u = tf.random_uniform(p.shape.as_list(), dtype=p.dtype)
+    if noise is not None:
+        u = noise
+    else:
+        u = tf.random_uniform(p.shape.as_list(), dtype=p.dtype)
     z = tf.log(p) - tf.log(1. - p) + tf.log(u) - tf.log(1. - u)
     return z
 
@@ -25,9 +28,12 @@ def binary_backward(p, b):
     zb = tf.log(p) - tf.log(1. - p) + tf.log(ub) - tf.log(1. - ub)
     return zb
 
-def categorical_forward(alpha):
+def categorical_forward(alpha, noise=None):
     '''draw reparameterization z of categorical variable b from p(z).'''
-    u = tf.random_uniform(alpha.shape.as_list(), dtype=alpha.dtype)
+    if noise is not None:
+        u = noise
+    else:
+        u = tf.random_uniform(alpha.shape.as_list(), dtype=alpha.dtype)
     gumbel = - tf.log( - tf.log(u + EPSILON) + EPSILON , name="gumbel")
     return alpha + gumbel
 
