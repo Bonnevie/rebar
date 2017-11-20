@@ -21,9 +21,12 @@ def binary_forward(p, noise=None):
     z = tf.log(p) - tf.log(1. - p) + tf.log(u) - tf.log(1. - u)
     return z
 
-def binary_backward(p, b):
+def binary_backward(p, b, noise=None):
     '''draw reparameterization z of binary variable b from p(z|b).'''
-    v = tf.random_uniform(p.shape.as_list(), dtype=p.dtype)
+    if noise is not None:
+        v = noise
+    else:
+        v = tf.random_uniform(p.shape.as_list(), dtype=p.dtype)
     ub = b * p + v * (b * (1. - p) + (1. - b) * p)
     zb = tf.log(p) - tf.log(1. - p) + tf.log(ub) - tf.log(1. - ub)
     return zb
@@ -120,29 +123,33 @@ def RELAX(loss, control, conditional_control, logp,
     '''
 
     #score
-    score = tf.gradients(logp, hard_params)[0]
+    scores = tf.gradients(logp, hard_params)
 
     #compute gradient of loss outside of dependence through b.
-    pure_grad = tf.gradients(loss, hard_params)[0]
+    pure_grads = tf.gradients(loss, hard_params)
 
     #Derivative of differentiable control variate.
-    relax_grad = tf.gradients(control - conditional_control, hard_params)[0]
+    relax_grads = tf.gradients(control - conditional_control, hard_params)
 
-    #aggregate gradient components
-    full_grad = tf.zeros_like(hard_params)
-    if pure_grad is not None:
-        full_grad += pure_grad
-    if relax_grad is not None:
-        #complete RELAX estimator
-        full_grad += ((loss - conditional_control) * score + relax_grad)
+    gradcollection = zip(pure_grads, relax_grads, hard_params, scores)
+    hard_params_grad = []
 
+    for pure_grad, relax_grad, hard_param, score in gradcollection:
+        #aggregate gradient components
+        full_grad = tf.zeros_like(hard_param)
+        if pure_grad is not None:
+            full_grad += pure_grad[0]
+        if relax_grad is not None:
+            #complete RELAX estimator
+            full_grad += ((loss - conditional_control) * score + relax_grad)
+        hard_params_grad += [(full_grad, hard_param)]
     #auxiliary gradients
     params_grad = list(zip(tf.gradients(loss, params), params))
     var_params_grad = list(zip(tf.gradients(full_grad, var_params), var_params))
 
     #compute variance gradient
     var_grad = [(tf.reduce_sum(2*full_grad*grad), param) for grad, param in var_params_grad]
-    return [(full_grad, hard_params)] + params_grad, loss, var_grad
+    return hard_params_grad + params_grad, loss, var_grad
 
 def REBAR(f, hard_params, forward, backward, distribution,
           hard_gate, soft_gate, nu=1., params=[], var_params=[]):
