@@ -4,7 +4,37 @@ EPSILON = 1e-16
 
 
 class DiscreteReparam:
+    """An abstract class for implementing reparameterizations of
+    discrete random variables.
+    Correctly constructs draws from p(z), p(b|z) and p(z|b) for a discrete v
+    variable b and its reparameterization z, using tf.stop_gradient where
+    appropriate.
+
+    Attributes:
+        param: parameter of discrete distribution.
+        u: noise variable used to generate z.
+        z: reparameterization of random variable b.
+        b: discretized random variable, using self.gate(z).
+        gatedz: relaxed version of b, using self.softgate(z).
+        v: noise variable used to generate zb.
+        zb: reparameterization of random variable b, conditioned on observed b.
+            i.e. zb~p(z|b).
+        gatedzb: relaxed version of b, using self.gate(zb).
+
+    Methods:
+
+
+    """
     def __init__(self, param, noise=None, coupled=False, cond_noise=None, temperature=1.):
+        """Creates an instance of DiscreteReparam.
+
+        Args:
+            param: Tensorflow tensor equal to parameter of distribution.
+            noise: Tensorflow tensor to be used as noise source u.
+            coupled: Boolean indicating whether to use coupled or independent
+                noise for z and zb.
+
+        """
         with tf.name_scope("reparameterization"):
             self.param = param
             self.noise_shape = param.shape.as_list()
@@ -42,6 +72,23 @@ class DiscreteReparam:
             self.logp = self.logpdf(self.param, self.b)
 
     def rebar_params(self, f_loss, weight):
+        """Returns parameters for relax.RELAX() function corresponding to a
+        standard REBAR estimator.
+
+        Example:
+            relax.RELAX(*discretereparam.rebar_params(), hard_params)
+
+        Args:
+            f_loss: function object providing the loss the REBAR estimator is
+                derived with respect to.
+            weight: a scalar parameter used as a scaling factor on the control
+                variate.
+
+        Returns:
+            rebar_params: a 4-tuple corresponding to the parameters
+                (loss, control, conditional_control, logp) expected by the
+                RELAX function.
+        """
         return (f_loss(self.b),
                 weight*f_loss(self.softgate(self.z, self.temperature)),
                 weight*f_loss(self.softgate(self.zb, self.temperature)),
@@ -69,6 +116,12 @@ class DiscreteReparam:
 
 
 class BinaryReparam(DiscreteReparam):
+    """DiscreteReparam subclass implementing reparameterization for
+        binary ({0,1} Bernoulli) random variables.
+        If parameter is of size (N,), it parameterizes N binary variables,
+        and the n'th element of the parameter vector p is the logit of the
+        probability of the n'th binary variable being 1.
+    """
     @staticmethod
     def logpdf(p, b):
         return b * (-tf.nn.softplus(-p)) + (1 - b) * (-p - tf.nn.softplus(-p))
@@ -93,7 +146,7 @@ class BinaryReparam(DiscreteReparam):
         return tf.clip_by_value(v, 0., 1.)
 
 def binary_forward(p, noise=None):
-    '''draw reparameterization z of binary variable b from p(z).'''
+    """draw reparameterization z of binary variable b from p(z)."""
     if noise is not None:
         u = noise
     else:
@@ -102,7 +155,7 @@ def binary_forward(p, noise=None):
     return z
 
 def binary_backward(p, b, noise=None):
-    '''draw reparameterization z of binary variable b from p(z|b).'''
+    """draw reparameterization z of binary variable b from p(z|b)."""
     if noise is not None:
         v = noise
     else:
@@ -114,6 +167,15 @@ def binary_backward(p, b, noise=None):
     return zb
 
 class CategoricalReparam(DiscreteReparam):
+    """DiscreteReparam subclass implementing reparameterization for
+        categorical random variables.
+        If the parameter p is of size (N, K), it parameterizes N categorical
+        variables with an event space of size K. Random draws are one-hot
+        encoded so that the random variable is also size (N, K). The n'th row
+        of the parameter matrix is the unnormalized log-probabilities of the
+        n'th categorical variable, such that tf.nn.softmax(p, axis=-1) gives
+        the categorical probabilities.
+    """
     @staticmethod
     def logpdf(p, b):
         return tf.reduce_sum(p*b)
@@ -145,7 +207,7 @@ class CategoricalReparam(DiscreteReparam):
         return (1.-b)*vrest + b*vtop
 
 def categorical_forward(alpha, noise=None):
-    '''draw reparameterization z of categorical variable b from p(z).'''
+    """draw reparameterization z of categorical variable b from p(z)."""
     if noise is not None:
         u = noise
     else:
@@ -154,7 +216,7 @@ def categorical_forward(alpha, noise=None):
     return alpha + gumbel
 
 def categorical_backward(alpha, s, noise=None):
-    '''draw reparameterization z of categorical variable b from p(z|b).'''
+    """draw reparameterization z of categorical variable b from p(z|b)."""
     def truncated_gumbel(gumbel, truncation):
         return -tf.log(EPSILON + tf.exp(-gumbel) + tf.exp(-truncation))
     if noise is not None:
