@@ -1,7 +1,7 @@
 import numpy as np
 import tensorflow as tf
 import matplotlib.pyplot as plt
-from reparam import BinaryReparam, CategoricalReparam
+from relaxflow.reparam import BinaryReparam, CategoricalReparam
 import tqdm
 EPSILON = 1e-16
 
