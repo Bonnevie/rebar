@@ -9,9 +9,9 @@ EPSILON = 1e-16
 def killnan(X):
     return tf.where(tf.is_nan(X), tf.zeros_like(X), X)
 
-
 def RELAX(loss, control, conditional_control, logp,
-          hard_params, params=[], var_params=[], handle_nan=True):
+          hard_params, params=[], var_params=[], weight=1.,
+          handle_nan=True, summaries=False):
     '''Estimate the gradient of "loss" with respect to "hard_params" which
     enter the loss through a stochastic non-differentiable map.
     Use RELAX estimator for the gradient with respect to "hard_params" and
@@ -35,6 +35,7 @@ def RELAX(loss, control, conditional_control, logp,
         var_params: parameters that the estimator's variance
             should be minimized for.
         handle_nan: set NaNs occurring due to derivative operations to zero.
+        split: Return
 
     Returns:
         gradients: REBAR gradient estimator for params and hard_params.
@@ -51,18 +52,24 @@ def RELAX(loss, control, conditional_control, logp,
 
         with tf.name_scope("relax_grad"):
             # Derivative of differentiable control variate.
-            relax_grads = tf.gradients(control - conditional_control,
+            relax_grads = tf.gradients((control - conditional_control),
                                        hard_params)
 
         gradcollection = zip(pure_grads, relax_grads, hard_params, scores)
         hard_params_grads = []
         var_params_grads = [(tf.zeros_like(var_param), var_param)
                             for var_param in var_params]
-
+        weight_grad = (tf.zeros_like(weight, dtype=weight.dtype), weight)
+        approx_gap = (loss - weight*conditional_control)
+        if summaries:
+            tf.summary.scalar('approx_gap', approx_gap)
         with tf.name_scope("collect_grads"):
             for pure_grad, relax_grad, hard_param, score in gradcollection:
                 if handle_nan:
                     score = killnan(score)
+
+                score_grad =  approx_gap * score
+
                 # aggregate gradient components
                 full_grad = tf.zeros_like(hard_param)
                 if pure_grad is not None:
@@ -74,8 +81,7 @@ def RELAX(loss, control, conditional_control, logp,
                     if handle_nan:
                         relax_grad = killnan(relax_grad)
                     # complete RELAX estimator
-                    full_grad += ((loss - conditional_control) * (score) +
-                                  relax_grad)
+                    full_grad += (score_grad + weight*relax_grad)
                 hard_params_grads += [(full_grad, hard_param)]
                 with tf.name_scope("variance_grad"):
                     grad_grads = tf.gradients(full_grad, var_params)
@@ -85,12 +91,18 @@ def RELAX(loss, control, conditional_control, logp,
                                         2*tf.reduce_sum(full_grad)*(grad_grad),
                                         param) for grad_grad, (var_grad, param)
                                         in zip(grad_grads, var_params_grads)]
+                    weight_grad = (weight_grad[0] + 2.*tf.reduce_sum(full_grad*(-conditional_control * score + relax_grad)), weight_grad[1])
+                if summaries:
+                    tf.summary.histogram("relax_grad_"+hard_param.name.replace(":","_"), relax_grad)
+                    tf.summary.histogram("score_grad_"+hard_param.name.replace(":","_"), score_grad)
+
+
 
         with tf.name_scope("params_grad"):
             # ordinary parameter gradients
             params_grads = list(zip(tf.gradients(loss, params), params))
 
-        return hard_params_grads + params_grads, var_params_grads
+        return hard_params_grads + params_grads, var_params_grads + [weight_grad]
 
 if __name__ is "__main__":
 

@@ -95,8 +95,8 @@ class DiscreteReparam:
                 RELAX function.
         """
         return (f_loss(self.b),
-                weight*f_loss(self.softgate(self.z, self.temperature)),
-                weight*f_loss(self.softgate(self.zb, self.temperature)),
+                weight*f_loss(self.gatedz),
+                weight*f_loss(self.gatedzb),
                 self.logp)
 
     @staticmethod
