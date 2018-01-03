@@ -3,6 +3,7 @@ import tensorflow as tf
 import matplotlib.pyplot as plt
 from relaxflow.reparam import BinaryReparam, CategoricalReparam
 import tqdm
+import pdb
 EPSILON = 1e-16
 
 
@@ -57,9 +58,10 @@ def RELAX(loss, control, conditional_control, logp,
 
         gradcollection = zip(pure_grads, relax_grads, hard_params, scores)
         hard_params_grads = []
+        vectorized = []
         var_params_grads = [(tf.zeros_like(var_param), var_param)
                             for var_param in var_params]
-        weight_grad = (tf.zeros_like(weight, dtype=weight.dtype), weight)
+        weight_grad = tf.zeros_like(weight, dtype=weight.dtype)
         approx_gap = (loss - weight*conditional_control)
         if summaries:
             tf.summary.scalar('approx_gap', approx_gap)
@@ -83,15 +85,18 @@ def RELAX(loss, control, conditional_control, logp,
                     # complete RELAX estimator
                     full_grad += (score_grad + weight*relax_grad)
                 hard_params_grads += [(full_grad, hard_param)]
-                with tf.name_scope("variance_grad"):
-                    grad_grads = tf.gradients(full_grad, var_params)
-                    if handle_nan:
-                        grad_grads = [killnan(grad) for grad in grad_grads]
-                    var_params_grads = [(var_grad +
-                                        2*tf.reduce_sum(full_grad)*(grad_grad),
-                                        param) for grad_grad, (var_grad, param)
-                                        in zip(grad_grads, var_params_grads)]
-                    weight_grad = (weight_grad[0] + 2.*tf.reduce_sum(full_grad*(-conditional_control * score + relax_grad)), weight_grad[1])
+                weight_grad = weight_grad - 2.*tf.reduce_sum(full_grad*(-conditional_control * score + relax_grad))
+                vectorized.append(tf.reshape(full_grad, (-1,)))
+            with tf.name_scope("variance_grad"):
+                grad_vec = tf.reduce_mean(tf.concat(vectorized, axis=0))
+                #pdb.set_trace()
+                grad_grads = tf.gradients(grad_vec, var_params)
+                if handle_nan:
+                    grad_grads = [killnan(grad) for grad in grad_grads]
+                var_params_grad = [(-2*grad_vec*grad_grad, var_param)
+                                   for grad_grad, var_param in zip(grad_grads, var_params)]
+
+
                 if summaries:
                     tf.summary.histogram("relax_grad_"+hard_param.name.replace(":","_"), relax_grad)
                     tf.summary.histogram("score_grad_"+hard_param.name.replace(":","_"), score_grad)
@@ -102,7 +107,7 @@ def RELAX(loss, control, conditional_control, logp,
             # ordinary parameter gradients
             params_grads = list(zip(tf.gradients(loss, params), params))
 
-        return hard_params_grads + params_grads, var_params_grads + [weight_grad]
+        return hard_params_grads + params_grads, var_params_grads + [(weight_grad, weight)]
 
 if __name__ is "__main__":
 
