@@ -73,7 +73,7 @@ class DiscreteReparam:
             with tf.name_scope("backward"):
                 self.zb = self.backward(self.param, self.b, self.v)
                 with tf.name_scope("gate"):
-                    self.gatedzb = self.softgate(self.b, self.temperature)
+                    self.gatedzb = self.softgate(self.zb, self.temperature)
             self.logp = self.logpdf(self.param, self.b)
 
     def rebar_params(self, f_loss, weight):
