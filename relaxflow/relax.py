@@ -44,16 +44,19 @@ def RELAX(loss, control, conditional_control, logp,
         var_grad: gradient of estimator variance for var_params.
     '''
     with tf.name_scope("RELAX"):
+        approx_gap = (loss - weight*conditional_control)
+        blocked_approx_gap = tf.stop_gradient(approx_gap)
         with tf.name_scope("score"):
-            scores = tf.gradients(logp, hard_params)
-
+            scores = tf.gradients(tf.reduce_mean(logp*blocked_approx_gap), hard_params)
+        scores = tf.contrib.graph_editor.graph_replace(scores, {blocked_approx_gap: approx_gap})
+        #pdb.set_trace()
         with tf.name_scope("pure_grad"):
             # compute gradient of loss outside of dependence through b.
-            pure_grads = tf.gradients(loss, hard_params)
+            pure_grads = tf.gradients(tf.reduce_mean(loss), hard_params)
 
         with tf.name_scope("relax_grad"):
             # Derivative of differentiable control variate.
-            relax_grads = tf.gradients((control - conditional_control),
+            relax_grads = tf.gradients(tf.reduce_mean(control - conditional_control),
                                        hard_params)
 
         gradcollection = zip(pure_grads, relax_grads, hard_params, scores)
@@ -61,15 +64,13 @@ def RELAX(loss, control, conditional_control, logp,
         vectorized = []
         #var_params_grads = [(tf.zeros_like(var_param), var_param)
         #                    for var_param in var_params]
-        approx_gap = (loss - weight*conditional_control)
         if summaries:
             tf.summary.scalar('approx_gap', approx_gap)
         with tf.name_scope("collect_grads"):
             for pure_grad, relax_grad, hard_param, score in gradcollection:
                 if handle_nan:
                     score = killnan(score)
-
-                score_grad =  approx_gap * score
+                score_grad = score 
 
                 # aggregate gradient components
                 full_grad = tf.zeros_like(hard_param)
