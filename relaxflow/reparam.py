@@ -38,22 +38,27 @@ class DiscreteReparam:
 
         """
         with tf.name_scope("reparameterization"):
-            self.param = param
+            self.param = param #assume unconstrained
             self.noise_shape = param.shape.as_list()
             self.temperature = temperature
-
+            self.coupled = coupled
+            
+            #set noise tensor u to external tensor
             if noise is not None:
                 assert(noise.shape.as_list() == self.noise_shape)
                 self.u = noise
             else:
                 self.u = tf.random_uniform(self.noise_shape, dtype=param.dtype)
             self.u = tf.stop_gradient(self.u)
+            
+            #sample random variable b by discretizing random z
             with tf.name_scope("forward"):
                 self.z = self.forward(self.param, self.u)
                 with tf.name_scope("gate"):
                     self.b = tf.stop_gradient(self.gate(self.z))
                     self.gatedz = self.softgate(self.z, self.temperature)
-            # use "is not None" to comply with Tensorflow
+
+            #set cond. noise tensor v to external tensor, or couple to u
             with tf.name_scope("cond_noise"):
                 if coupled and (cond_noise is not None):
                     raise(ValueError("""coupled and cond_noise
@@ -69,7 +74,8 @@ class DiscreteReparam:
                     self.v = tf.random_uniform(self.noise_shape,
                                                dtype=param.dtype)
                 self.v = tf.stop_gradient(self.v)
-
+            
+            #sample a new z, conditional on sampled b
             with tf.name_scope("backward"):
                 self.zb = self.backward(self.param, self.b, self.v)
                 with tf.name_scope("gate"):
@@ -100,11 +106,11 @@ class DiscreteReparam:
                 self.logp)
 
     @staticmethod
-    def forward(p, u):
+    def forward(param, u):
         raise(NotImplementedError)
 
     @staticmethod
-    def backward(p, b, u):
+    def backward(param, b, u):
         raise(NotImplementedError)
 
     @staticmethod
@@ -113,10 +119,10 @@ class DiscreteReparam:
 
     @staticmethod
     def softgate(z, t):
-        return tf.nn.softmax(z/t, dim=-1)
+        return tf.nn.softmax(z/t, axis=-1)
 
     @staticmethod
-    def coupling(p, b, u):
+    def coupling(param, b, u):
         raise(NotImplementedError)
 
 
@@ -124,118 +130,118 @@ class BinaryReparam(DiscreteReparam):
     """DiscreteReparam subclass implementing reparameterization for
         binary ({0,1} Bernoulli) random variables.
         If parameter is of size (N,), it parameterizes N binary variables,
-        and the n'th element of the parameter vector p is the logit of the
+        and the n'th element of the parameter vector param is the logit of the
         probability of the n'th binary variable being 1.
     """
     @staticmethod
-    def logpdf(p, b):
-        return b * (-tf.nn.softplus(-p)) + (1 - b) * (-p - tf.nn.softplus(-p))
+    def logpdf(param, b):
+        return b * (-tf.nn.softplus(-param)) + (1 - b) * (-param - tf.nn.softplus(-param))
 
     @staticmethod
-    def forward(p, u):
-        return binary_forward(p, u)
+    def forward(param, u):
+        return binary_forward(param, u)
 
     @staticmethod
-    def backward(p, b, v):
-        return binary_backward(p, v, b)
+    def backward(param, b, v):
+        return binary_backward(param, v, b)
 
     @staticmethod
     def gate(z):
         return (1.+tf.sign(z))/2.
 
     @staticmethod
-    def coupling(p, b, u):
-        uprime = tf.nn.sigmoid(-p)
+    def coupling(param, b, u):
+        uprime = tf.nn.sigmoid(-param)
         v = ((1. - b) * (u/tf.clip_by_value(uprime, EPSILON, 1.)) +
              b * ((u - uprime) / tf.clip_by_value(1.-uprime, EPSILON, 1.)))
         return tf.clip_by_value(v, 0., 1.)
 
 
-def binary_forward(p, noise=None):
+def binary_forward(param, noise=None):
     """draw reparameterization z of binary variable b from p(z)."""
     if noise is not None:
         u = noise
     else:
-        u = tf.random_uniform(p.shape.as_list(), dtype=p.dtype)
-    z = p + tf.log(u) - tf.log(1. - u)
+        u = tf.random_uniform(param.shape.as_list(), dtype=param.dtype)
+    z = param + tf.log(u) - tf.log(1. - u)
     return z
 
 
-def binary_backward(p, b, noise=None):
+def binary_backward(param, b, noise=None):
     """draw reparameterization z of binary variable b from p(z|b)."""
     if noise is not None:
         v = noise
     else:
-        v = tf.random_uniform(p.shape.as_list(), dtype=p.dtype)
-    uprime = tf.nn.sigmoid(-p)
+        v = tf.random_uniform(param.shape.as_list(), dtype=param.dtype)
+    uprime = tf.nn.sigmoid(-param)
     ub = b * (uprime + (1. - uprime) * v) + (1. - b) * uprime * v
     ub = tf.clip_by_value(ub, 0., 1.)
-    zb = p + tf.log(ub) - tf.log(1. - ub)
+    zb = param + tf.log(ub) - tf.log(1. - ub)
     return zb
 
 
 class CategoricalReparam(DiscreteReparam):
     """DiscreteReparam subclass implementing reparameterization for
         categorical random variables.
-        If the parameter p is of size (N, K), it parameterizes N categorical
+        If the parameter param is of size (N, K), it parameterizes N categorical
         variables with an event space of size K. Random draws are one-hot
         encoded so that the random variable is also size (N, K). The n'th row
         of the parameter matrix is the unnormalized log-probabilities of the
-        n'th categorical variable, such that tf.nn.softmax(p, axis=-1) gives
+        n'th categorical variable, such that tf.nn.softmax(param, axis=-1) gives
         the categorical probabilities.
     """
     @staticmethod
-    def logpdf(p, b):
-        return tf.reduce_sum(p*b)
+    def logpdf(param, b):
+        return tf.reduce_sum(param*b)
 
     @staticmethod
-    def forward(p, u):
-        return categorical_forward(p, u)
+    def forward(param, u):
+        return categorical_forward(param, u)
 
     @staticmethod
-    def backward(p, b, v):
-        return categorical_backward(p, b, v)
+    def backward(param, b, v):
+        return categorical_backward(param, b, v)
 
     @staticmethod
     def gate(z):
         return tf.one_hot(tf.argmax(z, axis=-1), z.shape[-1], dtype=z.dtype)
 
     @staticmethod
-    def coupling(p, b, u):
+    def coupling(param, b, u):
         def robustgumbelcdf(g, K):
             return tf.exp(EPSILON - tf.exp(-g)*tf.exp(-K)) - EPSILON
 
-        z = p - tf.log(-tf.log(u + EPSILON) + EPSILON,
+        z = param - tf.log(-tf.log(u + EPSILON) + EPSILON,
                        name="gumbel")
-        vtop = robustgumbelcdf(z, -tf.reduce_logsumexp(p, axis=-1,
-                               keep_dims=True))
-        topgumbel = tf.reduce_sum(b*z, axis=-1, keep_dims=True)
-        vrest = tf.exp(-tf.exp(p)*(tf.exp(-z)-tf.exp(-topgumbel)))
+        vtop = robustgumbelcdf(z, -tf.reduce_logsumexp(param, axis=-1,
+                               keepdims=True))
+        topgumbel = tf.reduce_sum(b*z, axis=-1, keepdims=True)
+        vrest = tf.exp(-tf.exp(param)*(tf.exp(-z)-tf.exp(-topgumbel)))
         return (1.-b)*vrest + b*vtop
 
 
-def categorical_forward(alpha, noise=None):
+def categorical_forward(param, noise=None):
     """draw reparameterization z of categorical variable b from p(z)."""
     if noise is not None:
         u = noise
     else:
-        u = tf.random_uniform(alpha.shape.as_list(), dtype=alpha.dtype)
+        u = tf.random_uniform(param.shape.as_list(), dtype=param.dtype)
     gumbel = - tf.log(-tf.log(u + EPSILON) + EPSILON, name="gumbel")
-    return alpha + gumbel
+    return param + gumbel
 
 
-def categorical_backward(alpha, s, noise=None):
+def categorical_backward(param, s, noise=None):
     """draw reparameterization z of categorical variable b from p(z|b)."""
     def truncated_gumbel(gumbel, truncation):
         return -tf.log(EPSILON + tf.exp(-gumbel) + tf.exp(-truncation))
     if noise is not None:
         v = noise
     else:
-        v = tf.random_uniform(alpha.shape.as_list(), dtype=alpha.dtype)
+        v = tf.random_uniform(param.shape.as_list(), dtype=param.dtype)
 
     gumbel = -tf.log(-tf.log(v + EPSILON) + EPSILON, name="gumbel")
-    topgumbels = gumbel + tf.reduce_logsumexp(alpha, axis=-1, keep_dims=True)
-    topgumbel = tf.reduce_sum(s*topgumbels, axis=-1, keep_dims=True)
+    topgumbels = gumbel + tf.reduce_logsumexp(param, axis=-1, keepdims=True)
+    topgumbel = tf.reduce_sum(s*topgumbels, axis=-1, keepdims=True)
 
-    truncgumbel = truncated_gumbel(gumbel + alpha, topgumbel)
+    truncgumbel = truncated_gumbel(gumbel + param, topgumbel)
     return (1. - s)*truncgumbel + s*topgumbels
