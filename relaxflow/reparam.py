@@ -192,7 +192,7 @@ class CategoricalReparam(DiscreteReparam):
     """
     @staticmethod
     def logpdf(param, b):
-        return tf.reduce_sum(param*b)
+        return tf.reduce_sum((param - tf.reduce_logsumexp(param, axis=-1, keepdims=True))*b)
 
     @staticmethod
     def forward(param, u):
