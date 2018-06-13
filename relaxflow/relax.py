@@ -12,7 +12,7 @@ def killnan(X):
 
 def RELAX(loss, control, conditional_control, logp,
           hard_params, params=[], var_params=[], weight=1.,
-          handle_nan=True, summaries=False, report=False):
+          handle_nan=False, summaries=False, report=False):
     '''Estimate the gradient of "loss" with respect to "hard_params" which
     enter the loss through a stochastic non-differentiable map.
     Use RELAX estimator for the gradient with respect to "hard_params" and
@@ -103,11 +103,12 @@ def RELAX(loss, control, conditional_control, logp,
             # ordinary parameter gradients
             params_grads = list(zip(tf.gradients(loss, params), params))
         if report:
+            reinforce = tf.gradients(logp*tf.stop_gradient(loss), hard_params)
             only_scores = tf.gradients(tf.reduce_mean(logp), hard_params)
             bias = tf.gradients(tf.reduce_mean(logp*tf.stop_gradient(conditional_control)), hard_params)
             relax_control = tf.gradients(tf.reduce_mean(control), hard_params)
             relax_conditional_control = tf.gradients(tf.reduce_mean(conditional_control), hard_params)
-            report_collection = list(zip([scores, relax_control, relax_conditional_control, bias, only_scores]))
+            report_collection = [reinforce, scores, relax_control, relax_conditional_control, bias, only_scores]
             return hard_params_grads + params_grads, var_params_grads, report_collection #+ [(weight_grad, weight)]
 
         else:
